@@ -359,7 +359,7 @@ SELECT _seed_project(
 -- ============================================================
 -- Anthropic Project 10: Humanities & Social Science Evaluation
 -- Taskers: Eleanor Wright (18), Soo-Jin Park (19), James Wilson (13)
--- Reviewer role: Eleanor Wright (team_lead)
+-- Reviewer role: Eleanor Wright
 -- ~60 tasks, Nov 2024 – present
 -- ============================================================
 SELECT _seed_project(

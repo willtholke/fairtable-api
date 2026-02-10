@@ -91,15 +91,146 @@ def get_records(
     finally:
         conn.close()
 
-    # Convert datetime objects to ISO strings
-    results = []
-    for row in rows:
-        record = {}
-        for key, value in row.items():
-            if hasattr(value, "isoformat"):
-                record[key] = value.isoformat()
-            else:
-                record[key] = value
-        results.append(record)
+    return [_serialize_row(r) for r in rows]
 
-    return results
+
+@app.get("/records/submissions_enriched")
+def get_submissions_enriched(
+    base_id: str = Query(..., description="Tenant identifier (e.g. base_google)"),
+    submitted_by: int = Query(None, description="Filter by tasker ID"),
+    created_after: str = Query(None, description="Filter submissions after this ISO timestamp"),
+    created_before: str = Query(None, description="Filter submissions before this ISO timestamp"),
+    limit: int = Query(1000, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+    x_api_key: str = Header(..., alias="X-API-Key"),
+):
+    verify_api_key(x_api_key)
+
+    query = """
+        SELECT
+            s.record_id,
+            s.base_id,
+            s.task_record_id,
+            s.submitted_by,
+            s.submitted_at,
+            s.hours_logged,
+            s.status AS submission_status,
+            t.task_name,
+            t.task_type,
+            t.assigned_to,
+            t.status AS task_status,
+            COALESCE(rev_agg.review_count, 0) AS review_count,
+            COALESCE(rev_agg.avg_score, 0) AS avg_score,
+            COALESCE(rev_agg.median_score, 0) AS median_score,
+            COALESCE(rev_agg.min_score, 0) AS min_score,
+            COALESCE(rev_agg.max_score, 0) AS max_score
+        FROM submissions s
+        JOIN tasks t ON s.task_record_id = t.record_id
+        LEFT JOIN LATERAL (
+            SELECT
+                COUNT(*)::int AS review_count,
+                AVG(r.score) AS avg_score,
+                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY r.score) AS median_score,
+                MIN(r.score) AS min_score,
+                MAX(r.score) AS max_score
+            FROM reviews r
+            WHERE r.submission_record_id = s.record_id
+        ) rev_agg ON TRUE
+        WHERE s.base_id = %s
+    """
+    params: list = [base_id]
+
+    if submitted_by is not None:
+        query += " AND s.submitted_by = %s"
+        params.append(submitted_by)
+    if created_after:
+        query += " AND s.submitted_at >= %s"
+        params.append(created_after)
+    if created_before:
+        query += " AND s.submitted_at <= %s"
+        params.append(created_before)
+
+    query += " ORDER BY s.submitted_at DESC LIMIT %s OFFSET %s"
+    params.extend([limit, offset])
+
+    conn = get_db()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query, params)
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    return [_serialize_row(r) for r in rows]
+
+
+@app.get("/records/reviews_enriched")
+def get_reviews_enriched(
+    base_id: str = Query(..., description="Tenant identifier (e.g. base_google)"),
+    reviewed_by: str = Query(None, description="Filter by reviewer name"),
+    created_after: str = Query(None, description="Filter reviews after this ISO timestamp"),
+    created_before: str = Query(None, description="Filter reviews before this ISO timestamp"),
+    limit: int = Query(1000, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+    x_api_key: str = Header(..., alias="X-API-Key"),
+):
+    verify_api_key(x_api_key)
+
+    query = """
+        SELECT
+            r.record_id AS review_record_id,
+            r.base_id,
+            r.submission_record_id,
+            r.reviewed_by,
+            r.score,
+            r.status AS review_status,
+            r.comments,
+            r.reviewed_at,
+            s.record_id AS submission_record_id,
+            s.submitted_by,
+            s.submitted_at,
+            s.hours_logged,
+            s.status AS submission_status,
+            t.record_id AS task_record_id,
+            t.task_name,
+            t.task_type,
+            t.status AS task_status
+        FROM reviews r
+        JOIN submissions s ON r.submission_record_id = s.record_id
+        JOIN tasks t ON s.task_record_id = t.record_id
+        WHERE r.base_id = %s
+    """
+    params: list = [base_id]
+
+    if reviewed_by:
+        query += " AND r.reviewed_by = %s"
+        params.append(reviewed_by)
+    if created_after:
+        query += " AND r.reviewed_at >= %s"
+        params.append(created_after)
+    if created_before:
+        query += " AND r.reviewed_at <= %s"
+        params.append(created_before)
+
+    query += " ORDER BY r.reviewed_at DESC LIMIT %s OFFSET %s"
+    params.extend([limit, offset])
+
+    conn = get_db()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query, params)
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    return [_serialize_row(r) for r in rows]
+
+
+def _serialize_row(row):
+    record = {}
+    for key, value in row.items():
+        if hasattr(value, "isoformat"):
+            record[key] = value.isoformat()
+        else:
+            record[key] = value
+    return record
